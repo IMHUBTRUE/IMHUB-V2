@@ -1,0 +1,431 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Camera = workspace.CurrentCamera
+local lp = Players.LocalPlayer
+
+_G.jumpValue = _G.jumpValue or 150
+_G.speedValue = _G.speedValue or 16
+_G.noclipEnabled = false
+local NORMAL_JUMP = 50
+
+local camLockActive, camLockTarget = false, nil
+local jumpHeld = false
+local espEnabled = false
+local espLabels = {}
+
+-- Camera Lock Button (flutuante)
+local camLockBtnGui = Instance.new("ScreenGui")
+camLockBtnGui.Parent = game:GetService("CoreGui")
+local camLockBtn = Instance.new("TextButton", camLockBtnGui)
+camLockBtn.Size = UDim2.new(0, 160, 0, 38)
+camLockBtn.Position = UDim2.new(0.32, 0, 0.08, 0)
+camLockBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+camLockBtn.BackgroundTransparency = 0.25
+camLockBtn.TextColor3 = Color3.fromRGB(170, 0, 255)
+camLockBtn.Font = Enum.Font.GothamBold
+camLockBtn.TextSize = 22
+camLockBtn.Text = "Camera Lock (OFF)"
+camLockBtn.Active = true
+camLockBtn.Draggable = true
+Instance.new("UICorner", camLockBtn).CornerRadius = UDim.new(0, 8)
+local stroke = Instance.new("UIStroke", camLockBtn)
+stroke.Color = Color3.fromRGB(70, 10, 120)
+stroke.Thickness = 2
+stroke.Transparency = 0.2
+
+camLockBtnGui.Enabled = false
+
+local function updateCamLockText()
+    camLockBtn.Text = camLockActive and "Camera Lock (ON)" or "Camera Lock (OFF)"
+end
+camLockBtn.MouseButton1Click:Connect(function()
+    camLockActive = not camLockActive
+    updateCamLockText()
+    if camLockActive then
+        -- Só pega alvo uma vez ao ativar
+        local closest, smallest = nil, math.huge
+        local viewport = Camera.ViewportSize
+        local screenCenter = Vector2.new(viewport.X/2, viewport.Y/2)
+        for _,plr in ipairs(Players:GetPlayers()) do
+            if plr ~= lp and plr.Character and plr.Character:FindFirstChild("Head") then
+                local head = plr.Character.Head
+                local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local dist = (screenCenter - Vector2.new(pos.X,pos.Y)).Magnitude
+                    if dist < smallest then
+                        smallest = dist
+                        closest = plr
+                    end
+                end
+            end
+        end
+        camLockTarget = closest
+    else
+        camLockTarget = nil
+    end
+end)
+
+-- Jump Hack Button (flutuante)
+local jumpBtnGui = Instance.new("ScreenGui")
+jumpBtnGui.Parent = game:GetService("CoreGui")
+local jumpBtn = Instance.new("TextButton", jumpBtnGui)
+jumpBtn.Size = UDim2.new(0, 160, 0, 38)
+jumpBtn.Position = UDim2.new(0.61, 0, 0.08, 0)
+jumpBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+jumpBtn.BackgroundTransparency = 0.25
+jumpBtn.TextColor3 = Color3.fromRGB(50, 150, 255)
+jumpBtn.Font = Enum.Font.GothamBold
+jumpBtn.TextSize = 22
+jumpBtn.Text = "Jump (OFF)"
+jumpBtn.Active = true
+jumpBtn.Draggable = true
+Instance.new("UICorner", jumpBtn).CornerRadius = UDim.new(0, 8)
+local jumpStroke = Instance.new("UIStroke", jumpBtn)
+jumpStroke.Color = Color3.fromRGB(0, 60, 255)
+jumpStroke.Thickness = 2
+jumpStroke.Transparency = 0.2
+
+jumpBtnGui.Enabled = false
+
+local jumpSingleActive = false
+local function updateJumpText()
+    if jumpHeld then
+        jumpBtn.Text = "Jump (HELD)"
+    elseif jumpSingleActive then
+        jumpBtn.Text = "Jump (ONCE)"
+    else
+        jumpBtn.Text = "Jump (OFF)"
+    end
+end
+
+jumpBtn.MouseButton1Click:Connect(function()
+    if not jumpHeld then
+        jumpSingleActive = true
+        updateJumpText()
+        if lp.Character and lp.Character:FindFirstChild("Humanoid") then
+            local hum = lp.Character.Humanoid
+            hum.UseJumpPower = true
+            hum.JumpPower = _G.jumpValue
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+            task.spawn(function()
+                task.wait(0.3)
+                if hum then
+                    hum.JumpPower = NORMAL_JUMP
+                end
+                jumpSingleActive = false
+                updateJumpText()
+            end)
+        end
+    end
+end)
+jumpBtn.MouseButton1Down:Connect(function()
+    jumpHeld = true
+    updateJumpText()
+end)
+jumpBtn.MouseButton1Up:Connect(function()
+    jumpHeld = false
+    updateJumpText()
+end)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "🌙 IMHUB V2"
+gui.IgnoreGuiInset = true
+gui.Parent = game:GetService("CoreGui")
+
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 350, 0, 430)
+frame.Position = UDim2.new(0.5, -175, 0.38, 0)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+frame.Visible = false
+frame.Active = true
+frame.Draggable = true
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 16)
+Instance.new("UIStroke", frame).Color = Color3.fromRGB(120,80,220)
+
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.new(1, 0, 0, 40)
+title.Position = UDim2.new(0,0,0,0)
+title.Text = "IMHUB V2"
+title.BackgroundColor3 = Color3.fromRGB(60, 0, 100)
+title.TextColor3 = Color3.new(1, 1, 1)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 20
+
+-- Instagram handle ao lado do título IMHUB V2 (transparente e pequeno)
+local instaLabel = Instance.new("TextLabel", frame)
+instaLabel.Size = UDim2.new(0, 110, 0, 18) -- menor largura e altura
+instaLabel.Position = UDim2.new(1, -115, 0, 11) -- ajusta para alinhar com o topo
+instaLabel.BackgroundTransparency = 1
+instaLabel.Text = "INSTAGRAM: imhubtrue"
+instaLabel.TextColor3 = Color3.fromRGB(255, 80, 180)
+instaLabel.Font = Enum.Font.GothamBold
+instaLabel.TextSize = 12 -- menor tamanho
+instaLabel.TextStrokeTransparency = 0.3
+instaLabel.ZIndex = 20
+instaLabel.TextTransparency = 0.4
+
+local menuBtn = Instance.new("TextButton", gui)
+menuBtn.Size = UDim2.new(0, 60, 0, 60)
+menuBtn.Position = UDim2.new(0.5, -30, 0.85, 0)
+menuBtn.BackgroundColor3 = Color3.fromRGB(60, 0, 100)
+menuBtn.Text = "Menu"
+menuBtn.TextColor3 = Color3.new(1, 1, 1)
+menuBtn.Font = Enum.Font.GothamBold
+menuBtn.TextSize = 18
+menuBtn.ZIndex = 10
+menuBtn.Active = true
+menuBtn.Draggable = true
+Instance.new("UICorner", menuBtn).CornerRadius = UDim.new(1,0)
+Instance.new("UIStroke", menuBtn).Color = Color3.fromRGB(120,80,220)
+
+-- SCROLLING FRAME PARA MENU PRINCIPAL
+local mainPage = Instance.new("ScrollingFrame", frame)
+mainPage.Size = UDim2.new(1, 0, 1, -42)
+mainPage.Position = UDim2.new(0, 0, 0, 42)
+mainPage.BackgroundTransparency = 1
+mainPage.Visible = true
+mainPage.CanvasSize = UDim2.new(0,0,0,600)
+mainPage.ScrollBarThickness = 7
+mainPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+local nextY = 20
+
+-- Speed Section
+local speedBtn = Instance.new("TextButton", mainPage)
+speedBtn.Position = UDim2.new(0, 20, 0, nextY)
+speedBtn.Size = UDim2.new(0, 310, 0, 32)
+speedBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+speedBtn.Text = "Speed: OFF"
+speedBtn.TextColor3 = Color3.fromRGB(0,255,0)
+speedBtn.Font = Enum.Font.GothamBold
+speedBtn.TextSize = 20
+speedBtn.Active = true
+Instance.new("UICorner", speedBtn).CornerRadius = UDim.new(0, 8)
+speedBtn.MouseButton1Click:Connect(function()
+    _G.speedEnabled = not _G.speedEnabled
+    speedBtn.Text = "Speed: " .. (_G.speedEnabled and "ON" or "OFF")
+    speedBtn.TextColor3 = _G.speedEnabled and Color3.fromRGB(0,255,0) or Color3.fromRGB(0,255,0)
+    speedBtn.BackgroundColor3 = _G.speedEnabled and Color3.fromRGB(40,40,40) or Color3.fromRGB(40,40,40)
+end)
+nextY = nextY + 40
+
+local speedBox = Instance.new("TextBox", mainPage)
+speedBox.Position = UDim2.new(0, 20, 0, nextY)
+speedBox.Size = UDim2.new(0, 310, 0, 36)
+speedBox.Text = tostring(_G.speedValue)
+speedBox.Font = Enum.Font.GothamBold
+speedBox.TextSize = 22
+speedBox.BackgroundColor3 = Color3.fromRGB(40,40,40)
+speedBox.TextColor3 = Color3.new(1,1,1)
+Instance.new("UICorner", speedBox).CornerRadius = UDim.new(0,8)
+speedBox.FocusLost:Connect(function()
+    local v = tonumber(speedBox.Text)
+    if v then
+        _G.speedValue = v
+    else
+        speedBox.Text = tostring(_G.speedValue)
+    end
+end)
+
+nextY = nextY + 50
+
+-- Jump Section
+local jumpBtnMenu = Instance.new("TextButton", mainPage)
+jumpBtnMenu.Position = UDim2.new(0, 20, 0, nextY)
+jumpBtnMenu.Size = UDim2.new(0, 310, 0, 32)
+jumpBtnMenu.BackgroundColor3 = Color3.fromRGB(40,40,40)
+jumpBtnMenu.Text = "Jump Hack: OFF"
+jumpBtnMenu.TextColor3 = Color3.fromRGB(50,150,255)
+jumpBtnMenu.Font = Enum.Font.GothamBold
+jumpBtnMenu.TextSize = 20
+jumpBtnMenu.Active = true
+Instance.new("UICorner", jumpBtnMenu).CornerRadius = UDim.new(0, 8)
+jumpBtnMenu.MouseButton1Click:Connect(function()
+    jumpBtnGui.Enabled = not jumpBtnGui.Enabled
+    jumpBtnMenu.Text = "Jump Hack: " .. (jumpBtnGui.Enabled and "ON" or "OFF")
+    jumpBtnMenu.TextColor3 = jumpBtnGui.Enabled and Color3.fromRGB(50,150,255) or Color3.fromRGB(50,150,255)
+    jumpBtnMenu.BackgroundColor3 = jumpBtnGui.Enabled and Color3.fromRGB(40,40,40) or Color3.fromRGB(40,40,40)
+end)
+nextY = nextY + 40
+
+local jumpBox = Instance.new("TextBox", mainPage)
+jumpBox.Position = UDim2.new(0, 20, 0, nextY)
+jumpBox.Size = UDim2.new(0, 310, 0, 36)
+jumpBox.Text = tostring(_G.jumpValue)
+jumpBox.Font = Enum.Font.GothamBold
+jumpBox.TextSize = 22
+jumpBox.BackgroundColor3 = Color3.fromRGB(40,40,40)
+jumpBox.TextColor3 = Color3.new(1,1,1)
+Instance.new("UICorner", jumpBox).CornerRadius = UDim.new(0,8)
+jumpBox.FocusLost:Connect(function()
+    local v = tonumber(jumpBox.Text)
+    if v then
+        _G.jumpValue = v
+    else
+        jumpBox.Text = tostring(_G.jumpValue)
+    end
+end)
+
+nextY = nextY + 50
+
+-- ESP Button
+local espBtn = Instance.new("TextButton", mainPage)
+espBtn.Position = UDim2.new(0, 20, 0, nextY)
+espBtn.Size = UDim2.new(0, 310, 0, 32)
+espBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+espBtn.Text = "ESP: OFF"
+espBtn.TextColor3 = Color3.new(1,1,1)
+espBtn.Font = Enum.Font.GothamBold
+espBtn.TextSize = 16
+espBtn.Active = true
+Instance.new("UICorner", espBtn).CornerRadius = UDim.new(0, 8)
+espBtn.MouseButton1Click:Connect(function()
+    espEnabled = not espEnabled
+    espBtn.Text = "ESP: " .. (espEnabled and "ON" or "OFF")
+    espBtn.BackgroundColor3 = espEnabled and Color3.fromRGB(120,80,220) or Color3.fromRGB(40,40,40)
+    if espEnabled then
+        for _,plr in pairs(Players:GetPlayers()) do
+            if plr ~= lp then
+                createESPFor(plr)
+            end
+        end
+    else
+        for plr,_ in pairs(espLabels) do
+            removeESPFor(plr)
+        end
+    end
+end)
+nextY = nextY + 40
+
+-- Camera Lock Menu Button
+local aimlockMenuBtn = Instance.new("TextButton", mainPage)
+aimlockMenuBtn.Position = UDim2.new(0, 20, 0, nextY)
+aimlockMenuBtn.Size = UDim2.new(0, 310, 0, 32)
+aimlockMenuBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+aimlockMenuBtn.Text = "IMHUB Lock: OFF"
+aimlockMenuBtn.TextColor3 = Color3.new(1,1,1)
+aimlockMenuBtn.Font = Enum.Font.GothamBold
+aimlockMenuBtn.TextSize = 16
+aimlockMenuBtn.Active = true
+Instance.new("UICorner", aimlockMenuBtn).CornerRadius = UDim.new(0, 8)
+aimlockMenuBtn.MouseButton1Click:Connect(function()
+    camLockBtnGui.Enabled = not camLockBtnGui.Enabled
+    aimlockMenuBtn.Text = "IMHUB Lock: " .. (camLockBtnGui.Enabled and "ON" or "OFF")
+    aimlockMenuBtn.BackgroundColor3 = camLockBtnGui.Enabled and Color3.fromRGB(120,80,220) or Color3.fromRGB(40,40,40)
+end)
+nextY = nextY + 40
+
+-- Noclip toggle abaixo do Jump Hack
+local noclipBtn = Instance.new("TextButton", mainPage)
+noclipBtn.Position = UDim2.new(0, 20, 0, nextY)
+noclipBtn.Size = UDim2.new(0, 310, 0, 32)
+noclipBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
+noclipBtn.Text = "Noclip: OFF"
+noclipBtn.TextColor3 = Color3.new(1,1,1)
+noclipBtn.Font = Enum.Font.GothamBold
+noclipBtn.TextSize = 16
+noclipBtn.Active = true
+Instance.new("UICorner", noclipBtn).CornerRadius = UDim.new(0, 8)
+noclipBtn.MouseButton1Click:Connect(function()
+    _G.noclipEnabled = not _G.noclipEnabled
+    noclipBtn.Text = "Noclip: " .. (_G.noclipEnabled and "ON" or "OFF")
+    noclipBtn.BackgroundColor3 = _G.noclipEnabled and Color3.fromRGB(120,80,220) or Color3.fromRGB(40,40,40)
+end)
+nextY = nextY + 40
+
+menuBtn.MouseButton1Click:Connect(function()
+    frame.Visible = not frame.Visible
+end)
+
+function createESPFor(plr)
+    if plr == lp then return end
+    if plr.Character and plr.Character:FindFirstChild("Head") and not espLabels[plr] then
+        local gui = Instance.new("BillboardGui")
+        gui.Name = "ESPLabel"
+        gui.Size = UDim2.new(0, 200, 0, 32)
+        gui.AlwaysOnTop = true
+        gui.Adornee = plr.Character.Head
+        gui.Parent = plr.Character.Head
+
+        local label = Instance.new("TextLabel", gui)
+        label.Size = UDim2.new(1, 0, 1, 0)
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(0, 255, 255)
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 16
+        label.Text = ""
+
+        espLabels[plr] = {gui = gui, label = label}
+    end
+end
+
+function removeESPFor(plr)
+    if espLabels[plr] then
+        espLabels[plr].gui:Destroy()
+        espLabels[plr] = nil
+    end
+end
+
+Players.PlayerAdded:Connect(function(plr)
+    plr.CharacterAdded:Connect(function()
+        if espEnabled then
+            wait(0.1)
+            createESPFor(plr)
+        end
+    end)
+end)
+Players.PlayerRemoving:Connect(function(plr)
+    removeESPFor(plr)
+end)
+for _,plr in pairs(Players:GetPlayers()) do
+    plr.CharacterAdded:Connect(function()
+        if espEnabled then
+            wait(0.1)
+            createESPFor(plr)
+        end
+    end)
+end
+
+RunService.RenderStepped:Connect(function()
+    -- Camera Lock
+    if camLockActive and camLockTarget and camLockTarget ~= lp and camLockTarget.Character and camLockTarget.Character:FindFirstChild("Head") then
+        local headPos = camLockTarget.Character.Head.Position
+        local camPos = Camera.CFrame.Position
+        Camera.CFrame = CFrame.new(camPos, headPos)
+    end
+
+    local speedEnabled = _G.speedEnabled or false
+    local speedValue = _G.speedValue or 16
+    if lp.Character and lp.Character:FindFirstChild("Humanoid") then
+        local hum = lp.Character.Humanoid
+        if speedEnabled then
+            hum.WalkSpeed = speedValue
+        else
+            hum.WalkSpeed = 16
+        end
+        -- Noclip
+        for _,v in pairs(lp.Character:GetDescendants()) do
+            if v:IsA("BasePart") then v.CanCollide = not _G.noclipEnabled end
+        end
+    end
+
+    if jumpHeld and lp.Character and lp.Character:FindFirstChild("Humanoid") then
+        local hum = lp.Character.Humanoid
+        hum.UseJumpPower = true
+        hum.JumpPower = _G.jumpValue
+        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+    end
+
+    if espEnabled then
+        for plr,data in pairs(espLabels) do
+            if plr.Character and plr.Character:FindFirstChild("Head") and plr.Character:FindFirstChild("Humanoid") then
+                local head = plr.Character.Head
+                local dist = math.floor((lp.Character and lp.Character:FindFirstChild("Head") and (lp.Character.Head.Position-head.Position).Magnitude) or 0)
+                local hp = math.floor(plr.Character.Humanoid.Health)
+                data.label.Text = plr.Name.." | HP: "..hp.." | Dist: "..dist
+            else
+                removeESPFor(plr)
+            end
+        end
+    end
+end)
