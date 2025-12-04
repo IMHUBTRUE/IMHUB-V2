@@ -42,7 +42,6 @@ camLockBtn.MouseButton1Click:Connect(function()
     camLockActive = not camLockActive
     updateCamLockText()
     if camLockActive then
-        -- Só pega alvo uma vez ao ativar
         local closest, smallest = nil, math.huge
         local viewport = Camera.ViewportSize
         local screenCenter = Vector2.new(viewport.X/2, viewport.Y/2)
@@ -128,7 +127,7 @@ jumpBtn.MouseButton1Up:Connect(function()
 end)
 
 local gui = Instance.new("ScreenGui")
-gui.Name = "🌙 IMHUB V2"
+gui.Name = "๐ IMHUB V2"
 gui.IgnoreGuiInset = true
 gui.Parent = game:GetService("CoreGui")
 
@@ -151,15 +150,14 @@ title.TextColor3 = Color3.new(1, 1, 1)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 20
 
--- Instagram handle ao lado do título IMHUB V2 (transparente e pequeno)
 local instaLabel = Instance.new("TextLabel", frame)
-instaLabel.Size = UDim2.new(0, 110, 0, 18) -- menor largura e altura
-instaLabel.Position = UDim2.new(1, -115, 0, 11) -- ajusta para alinhar com o topo
+instaLabel.Size = UDim2.new(0, 110, 0, 18)
+instaLabel.Position = UDim2.new(1, -115, 0, 11)
 instaLabel.BackgroundTransparency = 1
 instaLabel.Text = "INSTAGRAM: imhubtrue"
 instaLabel.TextColor3 = Color3.fromRGB(255, 80, 180)
 instaLabel.Font = Enum.Font.GothamBold
-instaLabel.TextSize = 12 -- menor tamanho
+instaLabel.TextSize = 12
 instaLabel.TextStrokeTransparency = 0.3
 instaLabel.ZIndex = 20
 instaLabel.TextTransparency = 0.4
@@ -178,7 +176,6 @@ menuBtn.Draggable = true
 Instance.new("UICorner", menuBtn).CornerRadius = UDim.new(1,0)
 Instance.new("UIStroke", menuBtn).Color = Color3.fromRGB(120,80,220)
 
--- SCROLLING FRAME PARA MENU PRINCIPAL
 local mainPage = Instance.new("ScrollingFrame", frame)
 mainPage.Size = UDim2.new(1, 0, 1, -42)
 mainPage.Position = UDim2.new(0, 0, 0, 42)
@@ -190,7 +187,6 @@ mainPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
 local nextY = 20
 
--- Speed Section
 local speedBtn = Instance.new("TextButton", mainPage)
 speedBtn.Position = UDim2.new(0, 20, 0, nextY)
 speedBtn.Size = UDim2.new(0, 310, 0, 32)
@@ -204,8 +200,6 @@ Instance.new("UICorner", speedBtn).CornerRadius = UDim.new(0, 8)
 speedBtn.MouseButton1Click:Connect(function()
     _G.speedEnabled = not _G.speedEnabled
     speedBtn.Text = "Speed: " .. (_G.speedEnabled and "ON" or "OFF")
-    speedBtn.TextColor3 = _G.speedEnabled and Color3.fromRGB(0,255,0) or Color3.fromRGB(0,255,0)
-    speedBtn.BackgroundColor3 = _G.speedEnabled and Color3.fromRGB(40,40,40) or Color3.fromRGB(40,40,40)
 end)
 nextY = nextY + 40
 
@@ -229,7 +223,6 @@ end)
 
 nextY = nextY + 50
 
--- Jump Section
 local jumpBtnMenu = Instance.new("TextButton", mainPage)
 jumpBtnMenu.Position = UDim2.new(0, 20, 0, nextY)
 jumpBtnMenu.Size = UDim2.new(0, 310, 0, 32)
@@ -243,8 +236,6 @@ Instance.new("UICorner", jumpBtnMenu).CornerRadius = UDim.new(0, 8)
 jumpBtnMenu.MouseButton1Click:Connect(function()
     jumpBtnGui.Enabled = not jumpBtnGui.Enabled
     jumpBtnMenu.Text = "Jump Hack: " .. (jumpBtnGui.Enabled and "ON" or "OFF")
-    jumpBtnMenu.TextColor3 = jumpBtnGui.Enabled and Color3.fromRGB(50,150,255) or Color3.fromRGB(50,150,255)
-    jumpBtnMenu.BackgroundColor3 = jumpBtnGui.Enabled and Color3.fromRGB(40,40,40) or Color3.fromRGB(40,40,40)
 end)
 nextY = nextY + 40
 
@@ -268,7 +259,6 @@ end)
 
 nextY = nextY + 50
 
--- ESP Button
 local espBtn = Instance.new("TextButton", mainPage)
 espBtn.Position = UDim2.new(0, 20, 0, nextY)
 espBtn.Size = UDim2.new(0, 310, 0, 32)
@@ -297,7 +287,6 @@ espBtn.MouseButton1Click:Connect(function()
 end)
 nextY = nextY + 40
 
--- Camera Lock Menu Button
 local aimlockMenuBtn = Instance.new("TextButton", mainPage)
 aimlockMenuBtn.Position = UDim2.new(0, 20, 0, nextY)
 aimlockMenuBtn.Size = UDim2.new(0, 310, 0, 32)
@@ -315,7 +304,6 @@ aimlockMenuBtn.MouseButton1Click:Connect(function()
 end)
 nextY = nextY + 40
 
--- Noclip toggle abaixo do Jump Hack
 local noclipBtn = Instance.new("TextButton", mainPage)
 noclipBtn.Position = UDim2.new(0, 20, 0, nextY)
 noclipBtn.Size = UDim2.new(0, 310, 0, 32)
@@ -387,28 +375,43 @@ for _,plr in pairs(Players:GetPlayers()) do
 end
 
 RunService.RenderStepped:Connect(function()
-    -- Camera Lock
+
+    -- CAMERA LOCK
     if camLockActive and camLockTarget and camLockTarget ~= lp and camLockTarget.Character and camLockTarget.Character:FindFirstChild("Head") then
         local headPos = camLockTarget.Character.Head.Position
         local camPos = Camera.CFrame.Position
         Camera.CFrame = CFrame.new(camPos, headPos)
     end
 
+    -- SPEED
     local speedEnabled = _G.speedEnabled or false
     local speedValue = _G.speedValue or 16
     if lp.Character and lp.Character:FindFirstChild("Humanoid") then
         local hum = lp.Character.Humanoid
-        if speedEnabled then
-            hum.WalkSpeed = speedValue
-        else
-            hum.WalkSpeed = 16
-        end
-        -- Noclip
+        hum.WalkSpeed = speedEnabled and speedValue or 16
+
+        -----------------------------------------------------
+        -- 🔥 CORREÇÃO DO NOCLIP (SEM COLISÃO INTERNA) 🔥
+        -----------------------------------------------------
         for _,v in pairs(lp.Character:GetDescendants()) do
-            if v:IsA("BasePart") then v.CanCollide = not _G.noclipEnabled end
+            if v:IsA("BasePart") then
+                if _G.noclipEnabled then
+                    -- Noclip ON → tudo sem colisão
+                    v.CanCollide = false
+                else
+                    -- Noclip OFF → só HRP colide
+                    if v.Name == "HumanoidRootPart" then
+                        v.CanCollide = true
+                    else
+                        v.CanCollide = false
+                    end
+                end
+            end
         end
+        -----------------------------------------------------
     end
 
+    -- JUMP HELD
     if jumpHeld and lp.Character and lp.Character:FindFirstChild("Humanoid") then
         local hum = lp.Character.Humanoid
         hum.UseJumpPower = true
@@ -416,6 +419,7 @@ RunService.RenderStepped:Connect(function()
         hum:ChangeState(Enum.HumanoidStateType.Jumping)
     end
 
+    -- ESP UPDATE
     if espEnabled then
         for plr,data in pairs(espLabels) do
             if plr.Character and plr.Character:FindFirstChild("Head") and plr.Character:FindFirstChild("Humanoid") then
