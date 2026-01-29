@@ -1,435 +1,622 @@
+-- IMHUB - Redz Complete v2
+-- Restores Settings message and fixes ESP (updates on join/leave/death/respawn).
+-- Paste into executor (CoreGui).
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
 local Camera = workspace.CurrentCamera
 local lp = Players.LocalPlayer
 
+-- Defaults / globals
 _G.jumpValue = _G.jumpValue or 150
 _G.speedValue = _G.speedValue or 16
-_G.noclipEnabled = false
-local NORMAL_JUMP = 50
+_G.noclipEnabled = _G.noclipEnabled or false
+_G.speedEnabled = _G.speedEnabled or false
+_G.imhub_camera_bind = _G.imhub_camera_bind or Enum.KeyCode.B
+_G.imhub_jump_bind   = _G.imhub_jump_bind   or Enum.KeyCode.G
 
+local NORMAL_JUMP = 50
 local camLockActive, camLockTarget = false, nil
 local jumpHeld = false
+local jumpSingleActive = false
 local espEnabled = false
+
+-- espLabels stores per-player data: { gui = BillboardGui, label = TextLabel, diedConn = RBXScriptConnection, charRemovingConn = RBXScriptConnection }
 local espLabels = {}
 
--- Camera Lock Button (flutuante)
-local camLockBtnGui = Instance.new("ScreenGui")
-camLockBtnGui.Parent = game:GetService("CoreGui")
-local camLockBtn = Instance.new("TextButton", camLockBtnGui)
-camLockBtn.Size = UDim2.new(0, 160, 0, 38)
-camLockBtn.Position = UDim2.new(0.32, 0, 0.08, 0)
-camLockBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-camLockBtn.BackgroundTransparency = 0.25
-camLockBtn.TextColor3 = Color3.fromRGB(170, 0, 255)
-camLockBtn.Font = Enum.Font.GothamBold
-camLockBtn.TextSize = 22
-camLockBtn.Text = "Camera Lock (OFF)"
-camLockBtn.Active = true
-camLockBtn.Draggable = true
-Instance.new("UICorner", camLockBtn).CornerRadius = UDim.new(0, 8)
-local stroke = Instance.new("UIStroke", camLockBtn)
-stroke.Color = Color3.fromRGB(70, 10, 120)
-stroke.Thickness = 2
-stroke.Transparency = 0.2
-
-camLockBtnGui.Enabled = false
-
-local function updateCamLockText()
-    camLockBtn.Text = camLockActive and "Camera Lock (ON)" or "Camera Lock (OFF)"
+-- UI helpers
+local function new(class, props)
+    local obj = Instance.new(class)
+    if props then for k,v in pairs(props) do obj[k] = v end end
+    return obj
 end
-camLockBtn.MouseButton1Click:Connect(function()
-    camLockActive = not camLockActive
-    updateCamLockText()
-    if camLockActive then
-        local closest, smallest = nil, math.huge
-        local viewport = Camera.ViewportSize
-        local screenCenter = Vector2.new(viewport.X/2, viewport.Y/2)
-        for _,plr in ipairs(Players:GetPlayers()) do
-            if plr ~= lp and plr.Character and plr.Character:FindFirstChild("Head") then
-                local head = plr.Character.Head
-                local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
-                if onScreen then
-                    local dist = (screenCenter - Vector2.new(pos.X,pos.Y)).Magnitude
-                    if dist < smallest then
-                        smallest = dist
-                        closest = plr
-                    end
+local function corner(parent, r) local c = Instance.new("UICorner") c.CornerRadius = UDim.new(0, r or 8) c.Parent = parent return c end
+local function stroke(parent, color, thick, trans) local s = Instance.new("UIStroke") s.Color = color or Color3.fromRGB(255,80,100) s.Thickness = thick or 2 s.Transparency = trans or 0 s.Parent = parent return s end
+local function gradient(parent, c1, c2, rot) local g = Instance.new("UIGradient") g.Color = ColorSequence.new{ColorSequenceKeypoint.new(0,c1), ColorSequenceKeypoint.new(1,c2)} g.Rotation = rot or 45 g.Parent = parent return g end
+local function tweento(inst, props, info) info = info or TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out) TweenService:Create(inst, info, props):Play() end
+
+-- Utilities
+local function findClosestOnScreen()
+    local closest, smallest = nil, math.huge
+    local viewport = Camera.ViewportSize
+    local screenCenter = Vector2.new(viewport.X/2, viewport.Y/2)
+    for _,plr in ipairs(Players:GetPlayers()) do
+        if plr ~= lp and plr.Character and plr.Character:FindFirstChild("Head") then
+            local head = plr.Character.Head
+            local pos, onScreen = Camera:WorldToViewportPoint(head.Position)
+            if onScreen then
+                local dist = (screenCenter - Vector2.new(pos.X,pos.Y)).Magnitude
+                if dist < smallest then smallest = dist; closest = plr end
+            end
+        end
+    end
+    return closest
+end
+
+local function doSingleJump()
+    if lp.Character and lp.Character:FindFirstChild("Humanoid") then
+        local hum = lp.Character.Humanoid
+        hum.UseJumpPower = true
+        hum.JumpPower = _G.jumpValue
+        hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        task.spawn(function()
+            task.wait(0.3)
+            if hum then hum.JumpPower = NORMAL_JUMP end
+            jumpSingleActive = false
+        end)
+    end
+end
+
+-- Floating GUIs and buttons
+local floatingRoot = new("ScreenGui", {Parent = game:GetService("CoreGui")})
+floatingRoot.Name = "IMHUB_Floating"
+
+local camLockFloatingGui = new("ScreenGui", {Parent = floatingRoot})
+local jumpFloatingGui = new("ScreenGui", {Parent = floatingRoot})
+
+local function makeFloatingBtn(parent, pos, text)
+    local b = new("TextButton", {
+        Parent = parent,
+        Size = UDim2.new(0,150,0,40),
+        Position = pos,
+        BackgroundColor3 = Color3.fromRGB(25,25,25),
+        Text = text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 17,
+        TextColor3 = Color3.new(1,1,1),
+        Active = true,
+        Draggable = true,
+        AutoButtonColor = false,
+    })
+    corner(b, 10); stroke(b, Color3.fromRGB(255,100,140), 2, 0.25)
+    return b
+end
+
+local camLockFloatBtn = makeFloatingBtn(camLockFloatingGui, UDim2.new(0.28,0,0.06,0), "Camera Lock (OFF)")
+local jumpFloatBtn    = makeFloatingBtn(jumpFloatingGui,    UDim2.new(0.60,0,0.06,0), "Jump (OFF)")
+camLockFloatingGui.Enabled = false
+jumpFloatingGui.Enabled = false
+
+-- Main window
+local gui = new("ScreenGui", {Parent = game:GetService("CoreGui"), IgnoreGuiInset = true})
+gui.Name = "IMHUB_UI"
+local win = new("Frame", {
+    Parent = gui,
+    Size = UDim2.new(0,380,0,520),
+    Position = UDim2.new(0.5,-190,0.28,0),
+    BackgroundColor3 = Color3.fromRGB(20,20,20),
+})
+corner(win, 16); stroke(win, Color3.fromRGB(255,80,100), 1, 0.25); gradient(win, Color3.fromRGB(30,8,25), Color3.fromRGB(40,8,40), 320)
+
+-- Header (only "IMHUB")
+local header = new("Frame", {Parent = win, Size = UDim2.new(1,0,0,72), BackgroundTransparency = 1})
+local logo = new("Frame", {Parent = header, Size = UDim2.new(0,72,0,72), Position = UDim2.new(0,14,0,0), BackgroundColor3 = Color3.fromRGB(255,60,110)})
+corner(logo, 16); stroke(logo, Color3.fromRGB(255,120,160), 4, 0.5)
+local logoTxt = new("TextLabel", {Parent = logo, Size = UDim2.new(1,0,1,0), BackgroundTransparency = 1, Text = "IM", Font = Enum.Font.GothamBlack, TextColor3 = Color3.new(1,1,1), TextSize = 28})
+local title = new("TextLabel", {Parent = header, Size = UDim2.new(0.6,0,1,0), Position = UDim2.new(0,100,0,0), BackgroundTransparency = 1, Text = "IMHUB", Font = Enum.Font.GothamBold, TextColor3 = Color3.fromRGB(255,180,200), TextSize = 20, TextXAlignment = Enum.TextXAlignment.Left})
+
+-- Tab bar
+local tabbar = new("Frame", {Parent = win, Size = UDim2.new(1,-28,0,44), Position = UDim2.new(0,14,0,84), BackgroundTransparency = 1})
+local mainTabBtn = new("TextButton", {Parent = tabbar, Size = UDim2.new(0.48,0,1,0), Position = UDim2.new(0,0,0,0), BackgroundColor3 = Color3.fromRGB(30,30,30), Text = "Main", Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = Color3.new(1,1,1)})
+local settingsTabBtn = new("TextButton", {Parent = tabbar, Size = UDim2.new(0.48,0,1,0), Position = UDim2.new(0.52,0,0,0), BackgroundColor3 = Color3.fromRGB(30,30,30), Text = "Settings", Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = Color3.new(1,1,1)})
+corner(mainTabBtn,8); corner(settingsTabBtn,8); stroke(mainTabBtn, Color3.fromRGB(255,100,140), 1, 0.35)
+
+-- Pages as ScrollingFrames to avoid overflow
+local pageArea = UDim2.new(1,-28,1,-160)
+local pagePos = UDim2.new(0,14,0,136)
+local mainPage = new("ScrollingFrame", {Parent = win, Size = pageArea, Position = pagePos, BackgroundTransparency = 1, ScrollBarThickness = 8})
+mainPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
+local settingsPage = new("ScrollingFrame", {Parent = win, Size = pageArea, Position = pagePos, BackgroundTransparency = 1, Visible = false, ScrollBarThickness = 8})
+settingsPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+local mainLayout = new("UIListLayout", {Parent = mainPage, Padding = UDim.new(0,12), SortOrder = Enum.SortOrder.LayoutOrder})
+mainLayout.Padding = UDim.new(0,12)
+
+-- Card builder (keeps consistent)
+local function card(parent, title)
+    local c = new("Frame", {Parent = parent, Size = UDim2.new(1,0,0,72), BackgroundColor3 = Color3.fromRGB(30,30,30)})
+    corner(c, 12); stroke(c, Color3.fromRGB(255,100,140), 1, 0.35)
+    local lbl = new("TextLabel", {Parent = c, Size = UDim2.new(1,-150,1,0), Position = UDim2.new(0,18,0,0), BackgroundTransparency = 1, Text = title, Font = Enum.Font.GothamBold, TextColor3 = Color3.fromRGB(255,220,230), TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left})
+    return c, lbl
+end
+
+-- Keep UI refs for refresh
+local refs = {}
+
+-- Speed card
+do
+    local c, _ = card(mainPage, "Speed")
+    local toggle = new("TextButton", {Parent = c, Size = UDim2.new(0,120,0,36), Position = UDim2.new(1,-132,0.5,-18), BackgroundColor3 = Color3.fromRGB(48,48,48), Text ="OFF", Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = Color3.new(1,1,1)})
+    corner(toggle,10)
+    local input = new("TextBox", {Parent = c, Size = UDim2.new(0,120,0,32), Position = UDim2.new(1,-260,0.5,-16), BackgroundColor3 = Color3.fromRGB(40,40,40), Text = tostring(_G.speedValue), Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = Color3.new(1,1,1)})
+    corner(input,8)
+    toggle.MouseButton1Click:Connect(function() _G.speedEnabled = not _G.speedEnabled; refreshUI() end)
+    input.FocusLost:Connect(function() local v = tonumber(input.Text); if v then _G.speedValue = v else input.Text = tostring(_G.speedValue) end end)
+    refs.speedToggle = toggle refs.speedInput = input
+end
+
+-- Jump card
+do
+    local c, _ = card(mainPage, "Jump")
+    local toggle = new("TextButton", {Parent = c, Size = UDim2.new(0,120,0,36), Position = UDim2.new(1,-132,0.5,-18), BackgroundColor3 = Color3.fromRGB(48,48,48), Text ="OFF", Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = Color3.new(1,1,1)})
+    corner(toggle,10)
+    local input = new("TextBox", {Parent = c, Size = UDim2.new(0,120,0,32), Position = UDim2.new(1,-260,0.5,-16), BackgroundColor3 = Color3.fromRGB(40,40,40), Text = tostring(_G.jumpValue), Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = Color3.new(1,1,1)})
+    corner(input,8)
+    toggle.MouseButton1Click:Connect(function() jumpFloatingGui.Enabled = not jumpFloatingGui.Enabled; refreshUI() end)
+    input.FocusLost:Connect(function() local v = tonumber(input.Text); if v then _G.jumpValue = v else input.Text = tostring(_G.jumpValue) end end)
+    refs.jumpToggle = toggle refs.jumpInput = input
+end
+
+-- ESP card
+do
+    local c, _ = card(mainPage, "ESP")
+    local toggle = new("TextButton", {Parent = c, Size = UDim2.new(0,120,0,36), Position = UDim2.new(1,-132,0.5,-18), BackgroundColor3 = Color3.fromRGB(48,48,48), Text ="OFF", Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = Color3.new(1,1,1)})
+    corner(toggle,10)
+    toggle.MouseButton1Click:Connect(function()
+        espEnabled = not espEnabled
+        if not espEnabled then
+            -- remove all ESP
+            for p,data in pairs(espLabels) do
+                if data and data.gui then data.gui:Destroy() end
+                if data and data.diedConn then data.diedConn:Disconnect() end
+                if data and data.charRemovingConn then data.charRemovingConn:Disconnect() end
+                espLabels[p] = nil
+            end
+        else
+            -- create ESP for existing players
+            for _,plr in pairs(Players:GetPlayers()) do
+                if plr ~= lp and plr.Character and plr.Character:FindFirstChild("Head") then
+                    createESPFor(plr)
                 end
             end
         end
-        camLockTarget = closest
-    else
-        camLockTarget = nil
-    end
-end)
-
--- Jump Hack Button (flutuante)
-local jumpBtnGui = Instance.new("ScreenGui")
-jumpBtnGui.Parent = game:GetService("CoreGui")
-local jumpBtn = Instance.new("TextButton", jumpBtnGui)
-jumpBtn.Size = UDim2.new(0, 160, 0, 38)
-jumpBtn.Position = UDim2.new(0.61, 0, 0.08, 0)
-jumpBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-jumpBtn.BackgroundTransparency = 0.25
-jumpBtn.TextColor3 = Color3.fromRGB(50, 150, 255)
-jumpBtn.Font = Enum.Font.GothamBold
-jumpBtn.TextSize = 22
-jumpBtn.Text = "Jump (OFF)"
-jumpBtn.Active = true
-jumpBtn.Draggable = true
-Instance.new("UICorner", jumpBtn).CornerRadius = UDim.new(0, 8)
-local jumpStroke = Instance.new("UIStroke", jumpBtn)
-jumpStroke.Color = Color3.fromRGB(0, 60, 255)
-jumpStroke.Thickness = 2
-jumpStroke.Transparency = 0.2
-
-jumpBtnGui.Enabled = false
-
-local jumpSingleActive = false
-local function updateJumpText()
-    if jumpHeld then
-        jumpBtn.Text = "Jump (HELD)"
-    elseif jumpSingleActive then
-        jumpBtn.Text = "Jump (ONCE)"
-    else
-        jumpBtn.Text = "Jump (OFF)"
-    end
+        refreshUI()
+    end)
+    refs.espToggle = toggle
 end
 
-jumpBtn.MouseButton1Click:Connect(function()
-    if not jumpHeld then
-        jumpSingleActive = true
-        updateJumpText()
-        if lp.Character and lp.Character:FindFirstChild("Humanoid") then
-            local hum = lp.Character.Humanoid
-            hum.UseJumpPower = true
-            hum.JumpPower = _G.jumpValue
-            hum:ChangeState(Enum.HumanoidStateType.Jumping)
-            task.spawn(function()
-                task.wait(0.3)
-                if hum then
-                    hum.JumpPower = NORMAL_JUMP
+-- IMHUB Lock card
+do
+    local c,_ = card(mainPage, "IMHUB Lock")
+    local toggle = new("TextButton", {Parent = c, Size = UDim2.new(0,120,0,36), Position = UDim2.new(1,-132,0.5,-18), BackgroundColor3 = Color3.fromRGB(48,48,48), Text ="OFF", Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = Color3.new(1,1,1)})
+    corner(toggle,10)
+    toggle.MouseButton1Click:Connect(function() camLockFloatingGui.Enabled = not camLockFloatingGui.Enabled; refreshUI() end)
+    refs.aimToggle = toggle
+end
+
+-- Noclip card
+do
+    local c,_ = card(mainPage, "Noclip")
+    local toggle = new("TextButton", {Parent = c, Size = UDim2.new(0,120,0,36), Position = UDim2.new(1,-132,0.5,-18), BackgroundColor3 = Color3.fromRGB(48,48,48), Text ="OFF", Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = Color3.new(1,1,1)})
+    corner(toggle,10)
+    toggle.MouseButton1Click:Connect(function() _G.noclipEnabled = not _G.noclipEnabled; refreshUI() end)
+    refs.noclipToggle = toggle
+end
+
+-- Settings page: re-add message about binds (user asked)
+local sTitle = new("TextLabel", {Parent = settingsPage, Size = UDim2.new(1,-40,0,28), Position = UDim2.new(0,20,0,12), BackgroundTransparency = 1, Text = "Keybinds", Font = Enum.Font.GothamBold, TextSize = 18, TextColor3 = Color3.fromRGB(255,200,210)})
+local sDesc = new("TextLabel", {Parent = settingsPage, Size = UDim2.new(1,-40,0,40), Position = UDim2.new(0,20,0,44), BackgroundTransparency = 1, Text = "Click Change then press a key. Clear removes the bind. Default: Camera Lock = B, Jump = G.", Font = Enum.Font.Gotham, TextSize = 14, TextColor3 = Color3.fromRGB(200,160,170), TextWrapped = true})
+
+-- helper to format KeyCode
+local function formatKey(k) if not k then return "None" end return tostring(k):gsub("Enum.KeyCode.", "") end
+
+local awaitingBind = false
+local bindConn = nil
+
+local function createBindRow(parent, y, label, getBind, setBind)
+    local cont = new("Frame", {Parent = parent, Size = UDim2.new(1,-40,0,64), Position = UDim2.new(0,20,0,y), BackgroundTransparency = 1})
+    local lab = new("TextLabel", {Parent = cont, Size = UDim2.new(0.38,0,0,28), Position = UDim2.new(0,0,0,6), BackgroundTransparency = 1, Text = label, Font = Enum.Font.GothamBold, TextSize = 15, TextColor3 = Color3.fromRGB(255,200,210), TextXAlignment = Enum.TextXAlignment.Left})
+    local box = new("TextLabel", {Parent = cont, Size = UDim2.new(0.22,0,0,28), Position = UDim2.new(0.40,0,0,6), BackgroundColor3 = Color3.fromRGB(40,40,40), Text = formatKey(getBind()), Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Color3.new(1,1,1), TextXAlignment = Enum.TextXAlignment.Center})
+    corner(box,6)
+    local change = new("TextButton", {Parent = cont, Size = UDim2.new(0.18,0,0,28), Position = UDim2.new(0.64,0,0,6), BackgroundColor3 = Color3.fromRGB(220,60,110), Text = "Change", Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Color3.new(1,1,1)})
+    corner(change,6)
+    local clear = new("TextButton", {Parent = cont, Size = UDim2.new(0.18,0,0,28), Position = UDim2.new(0.82,0,0,6), BackgroundColor3 = Color3.fromRGB(160,40,50), Text = "Clear", Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = Color3.new(1,1,1)})
+    corner(clear,6)
+    local info = new("TextLabel", {Parent = cont, Size = UDim2.new(1,0,0,20), Position = UDim2.new(0,0,0,36), BackgroundTransparency = 1, Text = "", Font = Enum.Font.Gotham, TextSize = 12, TextColor3 = Color3.fromRGB(210,180,190)})
+
+    change.MouseButton1Click:Connect(function()
+        if awaitingBind then return end
+        awaitingBind = true
+        info.Text = "Press a key to bind "..label.."..."
+        if bindConn then bindConn:Disconnect() end
+        bindConn = UserInputService.InputBegan:Connect(function(input, gp)
+            if gp then return end
+            if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode ~= Enum.KeyCode.Unknown then
+                setBind(input.KeyCode)
+                box.Text = formatKey(getBind())
+                info.Text = "Bound: "..formatKey(getBind())
+                awaitingBind = false
+                bindConn:Disconnect()
+                bindConn = nil
+                task.delay(1.2, function() info.Text = "" end)
+            end
+        end)
+    end)
+
+    clear.MouseButton1Click:Connect(function()
+        setBind(nil)
+        box.Text = formatKey(getBind())
+        info.Text = "Cleared"
+        task.delay(1.2, function() info.Text = "" end)
+    end)
+
+    return {refresh = function() box.Text = formatKey(getBind()) end}
+end
+
+local cameraBindRow = createBindRow(settingsPage, 100, "Camera Lock", function() return _G.imhub_camera_bind end, function(v) _G.imhub_camera_bind = v end)
+local jumpBindRow   = createBindRow(settingsPage, 180, "Jump", function() return _G.imhub_jump_bind end, function(v) _G.imhub_jump_bind = v end)
+
+-- Tab switching
+local function showMain() mainPage.Visible = true settingsPage.Visible = false mainTabBtn.BackgroundColor3 = Color3.fromRGB(45,45,45); settingsTabBtn.BackgroundColor3 = Color3.fromRGB(30,30,30) end
+local function showSettings() mainPage.Visible = false settingsPage.Visible = true mainTabBtn.BackgroundColor3 = Color3.fromRGB(30,30,30); settingsTabBtn.BackgroundColor3 = Color3.fromRGB(45,45,45) end
+mainTabBtn.MouseButton1Click:Connect(showMain)
+settingsTabBtn.MouseButton1Click:Connect(showSettings)
+showMain()
+
+-- ESP: robust create/remove with connections
+function createESPFor(plr)
+    if not espEnabled then return end
+    if plr == lp then return end
+    if espLabels[plr] then return end
+    if not plr.Character or not plr.Character:FindFirstChild("Head") then return end
+
+    local head = plr.Character.Head
+    local guiESP = Instance.new("BillboardGui")
+    guiESP.Name = "ESPLabel"
+    guiESP.Size = UDim2.new(0,200,0,28)
+    guiESP.Adornee = head
+    guiESP.AlwaysOnTop = true
+    guiESP.Parent = head
+
+    local lbl = Instance.new("TextLabel", guiESP)
+    lbl.Size = UDim2.new(1,0,1,0)
+    lbl.BackgroundTransparency = 1
+    lbl.Font = Enum.Font.GothamBold
+    lbl.TextSize = 14
+    lbl.TextColor3 = Color3.fromRGB(255,200,220)
+    lbl.TextStrokeTransparency = 0.6
+    -- initial text
+    lbl.Text = plr.Name.." â€¢ HP: "..(plr.Character and plr.Character:FindFirstChild("Humanoid") and math.floor(plr.Character.Humanoid.Health) or 0).." â€¢ 0m"
+
+    -- connect to Humanoid.Died to remove label on death
+    local diedConn = nil
+    local charRemovingConn = nil
+    if plr.Character then
+        local hum = plr.Character:FindFirstChild("Humanoid")
+        if hum then
+            diedConn = hum.Died:Connect(function()
+                -- remove label when dead (it will be re-created on respawn via CharacterAdded)
+                if espLabels[plr] and espLabels[plr].gui then
+                    espLabels[plr].gui:Destroy()
                 end
-                jumpSingleActive = false
-                updateJumpText()
+                if espLabels[plr] and espLabels[plr].diedConn then
+                    espLabels[plr].diedConn:Disconnect()
+                end
+                if espLabels[plr] and espLabels[plr].charRemovingConn then
+                    espLabels[plr].charRemovingConn:Disconnect()
+                end
+                espLabels[plr] = nil
             end)
         end
-    end
-end)
-jumpBtn.MouseButton1Down:Connect(function()
-    jumpHeld = true
-    updateJumpText()
-end)
-jumpBtn.MouseButton1Up:Connect(function()
-    jumpHeld = false
-    updateJumpText()
-end)
-
-local gui = Instance.new("ScreenGui")
-gui.Name = "๐ IMHUB V2"
-gui.IgnoreGuiInset = true
-gui.Parent = game:GetService("CoreGui")
-
-local frame = Instance.new("Frame", gui)
-frame.Size = UDim2.new(0, 350, 0, 430)
-frame.Position = UDim2.new(0.5, -175, 0.38, 0)
-frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
-frame.Visible = false
-frame.Active = true
-frame.Draggable = true
-Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 16)
-Instance.new("UIStroke", frame).Color = Color3.fromRGB(120,80,220)
-
-local title = Instance.new("TextLabel", frame)
-title.Size = UDim2.new(1, 0, 0, 40)
-title.Position = UDim2.new(0,0,0,0)
-title.Text = "IMHUB V2"
-title.BackgroundColor3 = Color3.fromRGB(60, 0, 100)
-title.TextColor3 = Color3.new(1, 1, 1)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 20
-
-local instaLabel = Instance.new("TextLabel", frame)
-instaLabel.Size = UDim2.new(0, 110, 0, 18)
-instaLabel.Position = UDim2.new(1, -115, 0, 11)
-instaLabel.BackgroundTransparency = 1
-instaLabel.Text = "INSTAGRAM: imhubtrue"
-instaLabel.TextColor3 = Color3.fromRGB(255, 80, 180)
-instaLabel.Font = Enum.Font.GothamBold
-instaLabel.TextSize = 12
-instaLabel.TextStrokeTransparency = 0.3
-instaLabel.ZIndex = 20
-instaLabel.TextTransparency = 0.4
-
-local menuBtn = Instance.new("TextButton", gui)
-menuBtn.Size = UDim2.new(0, 60, 0, 60)
-menuBtn.Position = UDim2.new(0.5, -30, 0.85, 0)
-menuBtn.BackgroundColor3 = Color3.fromRGB(60, 0, 100)
-menuBtn.Text = "Menu"
-menuBtn.TextColor3 = Color3.new(1, 1, 1)
-menuBtn.Font = Enum.Font.GothamBold
-menuBtn.TextSize = 18
-menuBtn.ZIndex = 10
-menuBtn.Active = true
-menuBtn.Draggable = true
-Instance.new("UICorner", menuBtn).CornerRadius = UDim.new(1,0)
-Instance.new("UIStroke", menuBtn).Color = Color3.fromRGB(120,80,220)
-
-local mainPage = Instance.new("ScrollingFrame", frame)
-mainPage.Size = UDim2.new(1, 0, 1, -42)
-mainPage.Position = UDim2.new(0, 0, 0, 42)
-mainPage.BackgroundTransparency = 1
-mainPage.Visible = true
-mainPage.CanvasSize = UDim2.new(0,0,0,600)
-mainPage.ScrollBarThickness = 7
-mainPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
-
-local nextY = 20
-
-local speedBtn = Instance.new("TextButton", mainPage)
-speedBtn.Position = UDim2.new(0, 20, 0, nextY)
-speedBtn.Size = UDim2.new(0, 310, 0, 32)
-speedBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
-speedBtn.Text = "Speed: OFF"
-speedBtn.TextColor3 = Color3.fromRGB(0,255,0)
-speedBtn.Font = Enum.Font.GothamBold
-speedBtn.TextSize = 20
-speedBtn.Active = true
-Instance.new("UICorner", speedBtn).CornerRadius = UDim.new(0, 8)
-speedBtn.MouseButton1Click:Connect(function()
-    _G.speedEnabled = not _G.speedEnabled
-    speedBtn.Text = "Speed: " .. (_G.speedEnabled and "ON" or "OFF")
-end)
-nextY = nextY + 40
-
-local speedBox = Instance.new("TextBox", mainPage)
-speedBox.Position = UDim2.new(0, 20, 0, nextY)
-speedBox.Size = UDim2.new(0, 310, 0, 36)
-speedBox.Text = tostring(_G.speedValue)
-speedBox.Font = Enum.Font.GothamBold
-speedBox.TextSize = 22
-speedBox.BackgroundColor3 = Color3.fromRGB(40,40,40)
-speedBox.TextColor3 = Color3.new(1,1,1)
-Instance.new("UICorner", speedBox).CornerRadius = UDim.new(0,8)
-speedBox.FocusLost:Connect(function()
-    local v = tonumber(speedBox.Text)
-    if v then
-        _G.speedValue = v
-    else
-        speedBox.Text = tostring(_G.speedValue)
-    end
-end)
-
-nextY = nextY + 50
-
-local jumpBtnMenu = Instance.new("TextButton", mainPage)
-jumpBtnMenu.Position = UDim2.new(0, 20, 0, nextY)
-jumpBtnMenu.Size = UDim2.new(0, 310, 0, 32)
-jumpBtnMenu.BackgroundColor3 = Color3.fromRGB(40,40,40)
-jumpBtnMenu.Text = "Jump Hack: OFF"
-jumpBtnMenu.TextColor3 = Color3.fromRGB(50,150,255)
-jumpBtnMenu.Font = Enum.Font.GothamBold
-jumpBtnMenu.TextSize = 20
-jumpBtnMenu.Active = true
-Instance.new("UICorner", jumpBtnMenu).CornerRadius = UDim.new(0, 8)
-jumpBtnMenu.MouseButton1Click:Connect(function()
-    jumpBtnGui.Enabled = not jumpBtnGui.Enabled
-    jumpBtnMenu.Text = "Jump Hack: " .. (jumpBtnGui.Enabled and "ON" or "OFF")
-end)
-nextY = nextY + 40
-
-local jumpBox = Instance.new("TextBox", mainPage)
-jumpBox.Position = UDim2.new(0, 20, 0, nextY)
-jumpBox.Size = UDim2.new(0, 310, 0, 36)
-jumpBox.Text = tostring(_G.jumpValue)
-jumpBox.Font = Enum.Font.GothamBold
-jumpBox.TextSize = 22
-jumpBox.BackgroundColor3 = Color3.fromRGB(40,40,40)
-jumpBox.TextColor3 = Color3.new(1,1,1)
-Instance.new("UICorner", jumpBox).CornerRadius = UDim.new(0,8)
-jumpBox.FocusLost:Connect(function()
-    local v = tonumber(jumpBox.Text)
-    if v then
-        _G.jumpValue = v
-    else
-        jumpBox.Text = tostring(_G.jumpValue)
-    end
-end)
-
-nextY = nextY + 50
-
-local espBtn = Instance.new("TextButton", mainPage)
-espBtn.Position = UDim2.new(0, 20, 0, nextY)
-espBtn.Size = UDim2.new(0, 310, 0, 32)
-espBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
-espBtn.Text = "ESP: OFF"
-espBtn.TextColor3 = Color3.new(1,1,1)
-espBtn.Font = Enum.Font.GothamBold
-espBtn.TextSize = 16
-espBtn.Active = true
-Instance.new("UICorner", espBtn).CornerRadius = UDim.new(0, 8)
-espBtn.MouseButton1Click:Connect(function()
-    espEnabled = not espEnabled
-    espBtn.Text = "ESP: " .. (espEnabled and "ON" or "OFF")
-    espBtn.BackgroundColor3 = espEnabled and Color3.fromRGB(120,80,220) or Color3.fromRGB(40,40,40)
-    if espEnabled then
-        for _,plr in pairs(Players:GetPlayers()) do
-            if plr ~= lp then
-                createESPFor(plr)
+        -- Also listen for CharacterRemoving to clean up
+        charRemovingConn = plr.CharacterRemoving:Connect(function()
+            if espLabels[plr] and espLabels[plr].gui then
+                espLabels[plr].gui:Destroy()
             end
-        end
-    else
-        for plr,_ in pairs(espLabels) do
-            removeESPFor(plr)
-        end
+            if espLabels[plr] and espLabels[plr].diedConn then espLabels[plr].diedConn:Disconnect() end
+            if espLabels[plr] and espLabels[plr].charRemovingConn then espLabels[plr].charRemovingConn:Disconnect() end
+            espLabels[plr] = nil
+        end)
     end
-end)
-nextY = nextY + 40
 
-local aimlockMenuBtn = Instance.new("TextButton", mainPage)
-aimlockMenuBtn.Position = UDim2.new(0, 20, 0, nextY)
-aimlockMenuBtn.Size = UDim2.new(0, 310, 0, 32)
-aimlockMenuBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
-aimlockMenuBtn.Text = "IMHUB Lock: OFF"
-aimlockMenuBtn.TextColor3 = Color3.new(1,1,1)
-aimlockMenuBtn.Font = Enum.Font.GothamBold
-aimlockMenuBtn.TextSize = 16
-aimlockMenuBtn.Active = true
-Instance.new("UICorner", aimlockMenuBtn).CornerRadius = UDim.new(0, 8)
-aimlockMenuBtn.MouseButton1Click:Connect(function()
-    camLockBtnGui.Enabled = not camLockBtnGui.Enabled
-    aimlockMenuBtn.Text = "IMHUB Lock: " .. (camLockBtnGui.Enabled and "ON" or "OFF")
-    aimlockMenuBtn.BackgroundColor3 = camLockBtnGui.Enabled and Color3.fromRGB(120,80,220) or Color3.fromRGB(40,40,40)
-end)
-nextY = nextY + 40
-
-local noclipBtn = Instance.new("TextButton", mainPage)
-noclipBtn.Position = UDim2.new(0, 20, 0, nextY)
-noclipBtn.Size = UDim2.new(0, 310, 0, 32)
-noclipBtn.BackgroundColor3 = Color3.fromRGB(40,40,40)
-noclipBtn.Text = "Noclip: OFF"
-noclipBtn.TextColor3 = Color3.new(1,1,1)
-noclipBtn.Font = Enum.Font.GothamBold
-noclipBtn.TextSize = 16
-noclipBtn.Active = true
-Instance.new("UICorner", noclipBtn).CornerRadius = UDim.new(0, 8)
-noclipBtn.MouseButton1Click:Connect(function()
-    _G.noclipEnabled = not _G.noclipEnabled
-    noclipBtn.Text = "Noclip: " .. (_G.noclipEnabled and "ON" or "OFF")
-    noclipBtn.BackgroundColor3 = _G.noclipEnabled and Color3.fromRGB(120,80,220) or Color3.fromRGB(40,40,40)
-end)
-nextY = nextY + 40
-
-menuBtn.MouseButton1Click:Connect(function()
-    frame.Visible = not frame.Visible
-end)
-
-function createESPFor(plr)
-    if plr == lp then return end
-    if plr.Character and plr.Character:FindFirstChild("Head") and not espLabels[plr] then
-        local gui = Instance.new("BillboardGui")
-        gui.Name = "ESPLabel"
-        gui.Size = UDim2.new(0, 200, 0, 32)
-        gui.AlwaysOnTop = true
-        gui.Adornee = plr.Character.Head
-        gui.Parent = plr.Character.Head
-
-        local label = Instance.new("TextLabel", gui)
-        label.Size = UDim2.new(1, 0, 1, 0)
-        label.BackgroundTransparency = 1
-        label.TextColor3 = Color3.fromRGB(0, 255, 255)
-        label.Font = Enum.Font.GothamBold
-        label.TextSize = 16
-        label.Text = ""
-
-        espLabels[plr] = {gui = gui, label = label}
-    end
+    espLabels[plr] = { gui = guiESP, label = lbl, diedConn = diedConn, charRemovingConn = charRemovingConn }
 end
 
 function removeESPFor(plr)
-    if espLabels[plr] then
-        espLabels[plr].gui:Destroy()
-        espLabels[plr] = nil
+    local data = espLabels[plr]
+    if not data then return end
+    if data.gui then
+        pcall(function() data.gui:Destroy() end)
+    end
+    if data.diedConn then
+        pcall(function() data.diedConn:Disconnect() end)
+    end
+    if data.charRemovingConn then
+        pcall(function() data.charRemovingConn:Disconnect() end)
+    end
+    espLabels[plr] = nil
+end
+
+-- Player events: create on spawn if esp enabled, ensure removal on leave
+Players.PlayerAdded:Connect(function(plr)
+    plr.CharacterAdded:Connect(function(char)
+        task.wait(0.08)
+        if espEnabled then
+            createESPFor(plr)
+        end
+    end)
+    plr.CharacterRemoving:Connect(function() removeESPFor(plr) end)
+end)
+Players.PlayerRemoving:Connect(function(plr) removeESPFor(plr) end)
+-- initialize for existing players
+for _,plr in ipairs(Players:GetPlayers()) do
+    if plr ~= lp then
+        if plr.Character and plr.Character:FindFirstChild("Head") and espEnabled then
+            createESPFor(plr)
+        end
+        plr.CharacterAdded:Connect(function() task.wait(0.08) if espEnabled then createESPFor(plr) end end)
+        plr.CharacterRemoving:Connect(function() removeESPFor(plr) end)
     end
 end
 
-Players.PlayerAdded:Connect(function(plr)
-    plr.CharacterAdded:Connect(function()
-        if espEnabled then
-            wait(0.1)
-            createESPFor(plr)
-        end
-    end)
+-- Floating button behavior
+camLockFloatBtn.MouseButton1Click:Connect(function()
+    camLockActive = not camLockActive
+    camLockFloatBtn.Text = camLockActive and "Camera Lock (ON)" or "Camera Lock (OFF)"
+    if camLockActive then camLockTarget = findClosestOnScreen() else camLockTarget = nil end
+    refreshUI()
 end)
-Players.PlayerRemoving:Connect(function(plr)
-    removeESPFor(plr)
+camLockFloatBtn.MouseEnter:Connect(function() tweento(camLockFloatBtn, {BackgroundColor3 = Color3.fromRGB(60,20,40)}) end)
+camLockFloatBtn.MouseLeave:Connect(function() tweento(camLockFloatBtn, {BackgroundColor3 = Color3.fromRGB(25,25,25)}) end)
+
+jumpFloatBtn.MouseButton1Click:Connect(function()
+    if not jumpHeld then
+        jumpSingleActive = true
+        doSingleJump()
+        jumpFloatBtn.Text = "Jump (ONCE)"
+        task.delay(0.4, function() if not jumpHeld then jumpFloatBtn.Text = "Jump (OFF)" end end)
+    end
 end)
-for _,plr in pairs(Players:GetPlayers()) do
-    plr.CharacterAdded:Connect(function()
-        if espEnabled then
-            wait(0.1)
-            createESPFor(plr)
+jumpFloatBtn.MouseButton1Down:Connect(function() jumpHeld = true jumpFloatBtn.Text = "Jump (HELD)" end)
+jumpFloatBtn.MouseButton1Up:Connect(function() jumpHeld = false jumpFloatBtn.Text = "Jump (OFF)" end)
+jumpFloatBtn.MouseEnter:Connect(function() tweento(jumpFloatBtn, {BackgroundColor3 = Color3.fromRGB(40,30,70)}) end)
+jumpFloatBtn.MouseLeave:Connect(function() tweento(jumpFloatBtn, {BackgroundColor3 = Color3.fromRGB(25,25,25)}) end)
+
+-- Input binds
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.Keyboard then
+        if _G.imhub_camera_bind and input.KeyCode == _G.imhub_camera_bind then
+            camLockActive = not camLockActive
+            camLockFloatBtn.Text = camLockActive and "Camera Lock (ON)" or "Camera Lock (OFF)"
+            if camLockActive then camLockTarget = findClosestOnScreen() else camLockTarget = nil end
+            refreshUI()
+            return
         end
+        if _G.imhub_jump_bind and input.KeyCode == _G.imhub_jump_bind then
+            if not jumpHeld then
+                jumpSingleActive = true
+                doSingleJump()
+            end
+            return
+        end
+    end
+end)
+
+-- Menu floating IM button
+local menuBtn = new("TextButton", {Parent = gui, Size = UDim2.new(0,66,0,66), Position = UDim2.new(0.5,-33,0.86,0), BackgroundColor3 = Color3.fromRGB(255,40,60), Text = "IM", Font = Enum.Font.GothamBlack, TextSize = 20, TextColor3 = Color3.new(1,1,1), Active = true, Draggable = true})
+corner(menuBtn, 36); stroke(menuBtn, Color3.fromRGB(255,120,140), 3, 0.1)
+local pulse = TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true)
+TweenService:Create(menuBtn, pulse, {BackgroundTransparency = 0.05}):Play()
+menuBtn.MouseButton1Click:Connect(function()
+    win.Visible = not win.Visible
+    if win.Visible then tweento(menuBtn, {BackgroundColor3 = Color3.fromRGB(255,80,100)}) else tweento(menuBtn, {BackgroundColor3 = Color3.fromRGB(255,40,60)}) end
+end)
+
+-- Drag fix: manual dragging for window (win), menuBtn, camLockFloatBtn and jumpFloatBtn
+do
+    -- Ensure header captures input
+    header.Active = true
+    header.Selectable = true
+
+    -- Window drag
+    do
+        local dragging = false
+        local dragInput = nil
+        local dragStart = nil
+        local startPos = nil
+
+        local function update(input)
+            local delta = input.Position - dragStart
+            win.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+
+        header.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = win.Position
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                    end
+                end)
+            end
+        end)
+
+        header.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                dragInput = input
+            end
+        end)
+
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and input == dragInput then
+                update(input)
+            end
+        end)
+    end
+
+    -- Generic helper to make a frame/button draggable
+    local function makeDraggable(guiObject)
+        guiObject.Active = true
+        local dragging = false
+        local dragInput = nil
+        local dragStart = nil
+        local startPos = nil
+
+        local function update(input)
+            local delta = input.Position - dragStart
+            guiObject.Position = UDim2.new(
+                startPos.X.Scale,
+                startPos.X.Offset + delta.X,
+                startPos.Y.Scale,
+                startPos.Y.Offset + delta.Y
+            )
+        end
+
+        guiObject.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = guiObject.Position
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                    end
+                end)
+            end
+        end)
+
+        guiObject.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                dragInput = input
+            end
+        end)
+
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and input == dragInput then
+                update(input)
+            end
+        end)
+    end
+
+    -- Make menuBtn and floating buttons draggable
+    pcall(function()
+        if menuBtn then makeDraggable(menuBtn) end
+        if camLockFloatBtn then makeDraggable(camLockFloatBtn) end
+        if jumpFloatBtn then makeDraggable(jumpFloatBtn) end
     end)
 end
 
-RunService.RenderStepped:Connect(function()
+-- UI refresh function (sync UI from globals)
+function refreshUI()
+    if refs.speedToggle then
+        refs.speedToggle.Text = _G.speedEnabled and "ON" or "OFF"
+        refs.speedToggle.BackgroundColor3 = _G.speedEnabled and Color3.fromRGB(220,60,110) or Color3.fromRGB(48,48,48)
+        refs.speedInput.Text = tostring(_G.speedValue)
+    end
+    if refs.jumpToggle then
+        refs.jumpToggle.Text = jumpFloatingGui.Enabled and "ON" or "OFF"
+        refs.jumpToggle.BackgroundColor3 = jumpFloatingGui.Enabled and Color3.fromRGB(220,60,110) or Color3.fromRGB(48,48,48)
+        refs.jumpInput.Text = tostring(_G.jumpValue)
+    end
+    if refs.espToggle then
+        refs.espToggle.Text = espEnabled and "ON" or "OFF"
+        refs.espToggle.BackgroundColor3 = espEnabled and Color3.fromRGB(220,60,110) or Color3.fromRGB(48,48,48)
+    end
+    if refs.aimToggle then
+        refs.aimToggle.Text = camLockFloatingGui.Enabled and "ON" or "OFF"
+        refs.aimToggle.BackgroundColor3 = camLockFloatingGui.Enabled and Color3.fromRGB(220,60,110) or Color3.fromRGB(48,48,48)
+    end
+    if refs.noclipToggle then
+        refs.noclipToggle.Text = _G.noclipEnabled and "ON" or "OFF"
+        refs.noclipToggle.BackgroundColor3 = _G.noclipEnabled and Color3.fromRGB(220,60,110) or Color3.fromRGB(48,48,48)
+    end
 
-    -- CAMERA LOCK
+    camLockFloatBtn.Text = camLockActive and "Camera Lock (ON)" or "Camera Lock (OFF)"
+    jumpFloatBtn.Text = (jumpHeld and "Jump (HELD)") or (jumpSingleActive and "Jump (ONCE)") or "Jump (OFF)"
+
+    -- safe refresh for bind rows (they exist)
+    pcall(function() cameraBindRow.refresh(); jumpBindRow.refresh() end)
+end
+
+-- Initial refresh
+refreshUI()
+
+-- Main loop: apply effects (camera lock, speed, noclip, jump held, esp update)
+RunService.RenderStepped:Connect(function()
+    -- camera lock
     if camLockActive and camLockTarget and camLockTarget ~= lp and camLockTarget.Character and camLockTarget.Character:FindFirstChild("Head") then
         local headPos = camLockTarget.Character.Head.Position
         local camPos = Camera.CFrame.Position
         Camera.CFrame = CFrame.new(camPos, headPos)
     end
 
-    -- SPEED
-    local speedEnabled = _G.speedEnabled or false
-    local speedValue = _G.speedValue or 16
+    -- speed / noclip / jump held
     if lp.Character and lp.Character:FindFirstChild("Humanoid") then
         local hum = lp.Character.Humanoid
-        hum.WalkSpeed = speedEnabled and speedValue or 16
+        hum.WalkSpeed = (_G.speedEnabled and _G.speedValue) or 16
 
-        -----------------------------------------------------
-        -- 🔥 CORREÇÃO DO NOCLIP (SEM COLISÃO INTERNA) 🔥
-        -----------------------------------------------------
         for _,v in pairs(lp.Character:GetDescendants()) do
             if v:IsA("BasePart") then
                 if _G.noclipEnabled then
-                    -- Noclip ON → tudo sem colisão
                     v.CanCollide = false
                 else
-                    -- Noclip OFF → só HRP colide
-                    if v.Name == "HumanoidRootPart" then
-                        v.CanCollide = true
-                    else
-                        v.CanCollide = false
-                    end
+                    if v.Name == "HumanoidRootPart" then v.CanCollide = true else v.CanCollide = false end
                 end
             end
         end
-        -----------------------------------------------------
+
+        if jumpHeld then
+            hum.UseJumpPower = true
+            hum.JumpPower = _G.jumpValue
+            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
     end
 
-    -- JUMP HELD
-    if jumpHeld and lp.Character and lp.Character:FindFirstChild("Humanoid") then
-        local hum = lp.Character.Humanoid
-        hum.UseJumpPower = true
-        hum.JumpPower = _G.jumpValue
-        hum:ChangeState(Enum.HumanoidStateType.Jumping)
-    end
-
-    -- ESP UPDATE
+    -- ESP update: refresh text for each active label, create missing ones if espEnabled
     if espEnabled then
+        for _,plr in pairs(Players:GetPlayers()) do
+            if plr ~= lp and plr.Character and plr.Character:FindFirstChild("Head") then
+                if not espLabels[plr] then
+                    -- create label if missing (e.g., respawn)
+                    createESPFor(plr)
+                end
+            end
+        end
+
         for plr,data in pairs(espLabels) do
-            if plr.Character and plr.Character:FindFirstChild("Head") and plr.Character:FindFirstChild("Humanoid") then
-                local head = plr.Character.Head
-                local dist = math.floor((lp.Character and lp.Character:FindFirstChild("Head") and (lp.Character.Head.Position-head.Position).Magnitude) or 0)
+            if plr and data and data.label and plr.Character and plr.Character:FindFirstChild("Humanoid") then
+                local dist = math.floor((lp.Character and lp.Character:FindFirstChild("Head") and (lp.Character.Head.Position - plr.Character.Head.Position).Magnitude) or 0)
                 local hp = math.floor(plr.Character.Humanoid.Health)
-                data.label.Text = plr.Name.." | HP: "..hp.." | Dist: "..dist
+                data.label.Text = string.format("%s  HP: %d  %dm", plr.Name, hp, dist)
             else
+                -- cleanup if player or character missing
                 removeESPFor(plr)
             end
         end
+    else
+        -- if ESP disabled, ensure cleanup
+        for plr,_ in pairs(espLabels) do removeESPFor(plr) end
     end
 end)
+
+print("IMHUB V2 Redz Complete v2 loaded.")
